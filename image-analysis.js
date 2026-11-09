@@ -335,9 +335,9 @@
     var textC = sortedByLum[0];
     roles.text = textC.hex;
     roles.axis = textC.hex;
-    // 网格：比背景暗、彩度低、又明显比文字浅
+    // 网格：必须是低彩度（近灰）、比文字浅、且占比较大（网格线覆盖绘图区）
     var gridC = ink.filter(function (c) {
-      return c !== textC && c.chroma < 12 && c.lum > textC.lum + 40;
+      return c !== textC && c.chroma < 8 && c.lum > textC.lum + 40 && c.areaRatio > 0.02;
     }).sort(function (a, b) { return b.count - a.count; })[0];
     if (gridC) roles.grid = gridC.hex;
     // 系列色：排除文字与网格，按彩度优先、面积次之
@@ -626,7 +626,7 @@
     }
 
     // ---- 图例 ----
-    var legend = detectLegend(px, W, H, rect, roles, markerComps);
+    var legend = detectLegend(px, W, H, rect, roles, allComps);
 
     // ---- 组装 spec ----
     var S = global.StyleGrabSpec || (typeof require === 'function' ? require('./spec-schema.js') : null);
@@ -674,8 +674,17 @@
 
     // 图型专属参数
     if (typeInfo.type === 'bar') {
-      var barW = estimateBarWidth(mask, W, H, rect);
-      if (barW > 0) spec.specific.bar.widthRatio = clamp(barW / W * 3.2, 0.15, 0.95);
+      var barInfo = estimateBarWidth(mask, W, H, rect);
+      if (barInfo.width > 0) {
+        spec.specific.bar.widthRatio = clamp(barInfo.width / W * 3.2, 0.15, 0.95);
+        // 柱子间距：<=1px 视为无间距
+        spec.specific.bar.gap = barInfo.gap <= 1 ? 0 : clamp(barInfo.gap / W, 0, 0.02);
+      }
+      // 柱子描边：无边框则 stroke.markerEdge = 0
+      if (!hasBarBorder(px, W, H, rect, mask)) {
+        spec.strokes.markerEdge = 0;
+        spec.specific.bar.edgeWidth = 0;
+      }
     }
     if (typeInfo.type === 'heatmap') {
       spec.specific.heatmap.gradient = buildGradient(px, W, H, rect);
@@ -683,6 +692,7 @@
 
     // 分辨率因子（高分辨率图可信度更高）
     var resFactor = clamp(W / 1200, 0.4, 1);
+    var conf = {}, low = [];
 
     // ---- 显著性字母大小 ----（绘图区内上部、高度接近刻度字号的小连通域）
     var letterH = 0;
@@ -738,8 +748,6 @@
     }
 
     // ---- 置信度 ----
-    var conf = {};
-    var low = [];
     function mark(key, v) {
       conf[key] = clamp(v, 0.1, 0.98);
       if (conf[key] < 0.6) low.push(labelOf(key));
@@ -783,17 +791,40 @@
   }
 
   function measureStroke(px, W, H, hex, rect) {
-    var m = colorMask(px, W, H, hex, 14);
-    var area = 0, per = 0;
-    for (var y = Math.round(rect.y); y < rect.y + rect.h; y++) {
-      var off = y * W;
-      for (var x = Math.round(rect.x); x < rect.x + rect.w; x++) {
-        if (!m[off + x]) continue;
-        area++;
-        if (!m[off + x - 1] || !m[off + x + 1] || !m[(y - 1) * W + x] || !m[(y + 1) * W + x]) per++;
+    // 只在轴线位置（左边缘列 + 底部边缘行）检测，避免柱子/文字干扰
+    // 容差收紧到 8，进一步减少抗锯齿半透明边缘
+    var m = colorMask(px, W, H, hex, 8);
+    var vRuns = [], hRuns = [];
+    var edgeCols = 4; // 检测左边缘 4 列
+    var edgeRows = 4; // 检测底部 4 行
+    // Y 轴：左边缘若干列的垂直段长度
+    for (var dx = 0; dx < edgeCols; dx++) {
+      var x = Math.round(rect.x) - dx;
+      if (x < 0 || x >= W) continue;
+      var run = 0;
+      for (var y = Math.round(rect.y); y < rect.y + rect.h; y++) {
+        if (m[y * W + x]) run++;
+        else { if (run > 0) { vRuns.push(run); run = 0; } }
       }
+      if (run > 0) vRuns.push(run);
     }
-    return per > 0 ? 2 * area / per : 0;
+    // X 轴：底部边缘若干行的水平段长度
+    for (var dy = 0; dy < edgeRows; dy++) {
+      var yy = Math.round(rect.y + rect.h) - 1 + dy;
+      if (yy < 0 || yy >= H) continue;
+      var run2 = 0, off = yy * W;
+      for (var xx = Math.round(rect.x); xx < rect.x + rect.w; xx++) {
+        if (m[off + xx]) run2++;
+        else { if (run2 > 0) { hRuns.push(run2); run2 = 0; } }
+      }
+      if (run2 > 0) hRuns.push(run2);
+    }
+    // 抗锯齿只会让线变粗不会变细，取最小段长最接近真实线宽
+    var fv = vRuns.filter(function (l) { return l >= 1 && l <= 8; });
+    var fh = hRuns.filter(function (l) { return l >= 1 && l <= 8; });
+    var mv = fv.length ? Math.min.apply(null, fv) : 0;
+    var mh = fh.length ? Math.min.apply(null, fh) : 0;
+    return Math.min(mv, mh) || mv || mh;
   }
 
   function estimateBarWidth(mask, W, H, rect) {
@@ -805,15 +836,41 @@
       }
       if (best > rect.h * 0.3) widths.push(x);
     }
-    if (widths.length < 3) return 0;
-    // 连续列分成若干段，取段宽中位数
-    var segs = [], start = widths[0], prev = widths[0];
+    if (widths.length < 3) return { width: 0, gap: 0 };
+    // 连续列分成若干段
+    var segs = [], gaps = [], start = widths[0], prev = widths[0];
     for (var i = 1; i < widths.length; i++) {
-      if (widths[i] - prev > 2) { segs.push(prev - start + 1); start = widths[i]; }
+      if (widths[i] - prev > 2) {
+        segs.push(prev - start + 1);
+        gaps.push(widths[i] - prev - 1);
+        start = widths[i];
+      }
       prev = widths[i];
     }
     segs.push(prev - start + 1);
-    return median(segs.filter(function (s) { return s > 3; }));
+    var validSegs = segs.filter(function (s) { return s > 3; });
+    var w = validSegs.length ? median(validSegs) : 0;
+    var g = gaps.length ? median(gaps) : 0;
+    return { width: w, gap: g };
+  }
+
+  // 检测柱子是否有描边：比较柱体边缘与内部的亮度差
+  function hasBarBorder(px, W, H, rect, mask) {
+    var midY = Math.round(rect.y + rect.h * 0.5);
+    var edges = [], interiors = [];
+    for (var x = Math.round(rect.x) + 2; x < rect.x + rect.w - 2; x++) {
+      if (mask[midY * W + x]) {
+        var leftEdge = !mask[midY * W + (x - 1)];
+        var rightEdge = !mask[midY * W + (x + 1)];
+        var idx = (midY * W + x) * 4;
+        var lum = luminance(px[idx], px[idx + 1], px[idx + 2]);
+        if (leftEdge || rightEdge) edges.push(lum);
+        else interiors.push(lum);
+      }
+    }
+    if (edges.length < 5 || interiors.length < 10) return false;
+    var edgeLum = median(edges), intLum = median(interiors);
+    return Math.abs(edgeLum - intLum) > 18;
   }
 
   function buildGradient(px, W, H, rect) {
@@ -829,23 +886,38 @@
     return [list[0].hex, list[list.length - 1].hex];
   }
 
-  function detectLegend(px, W, H, rect, roles, circles) {
+  function detectLegend(px, W, H, rect, roles, comps) {
     var out = { visible: false, position: 'top-right', frame: false, columns: 1, detected: false };
-    // 找绘图区内的色块（面积小、接近方形、颜色接近某个系列色）
-    var swatches = circles.filter(function (c) {
-      return c.area > 20 && c.area < 700 && c.aspect > 0.5 && c.aspect < 2 && c.cx > rect.x && c.cx < rect.x + rect.w && c.cy > rect.y && c.cy < rect.y + rect.h;
+    // 搜索区域：绘图区上方及周围（图例常在图上方）
+    var searchX0 = Math.max(0, rect.x - W * 0.02);
+    var searchX1 = Math.min(W, rect.x + rect.w + W * 0.02);
+    var searchY0 = Math.max(0, rect.y - H * 0.18);
+    var searchY1 = Math.min(H, rect.y + rect.h + H * 0.05);
+    // 找小方形色块（图例标记通常是方形/矩形，面积小）
+    var swatches = comps.filter(function (c) {
+      return c.area > 15 && c.area < 900 && c.aspect > 0.4 && c.aspect < 2.5 &&
+             c.cx > searchX0 && c.cx < searchX1 && c.cy > searchY0 && c.cy < searchY1 &&
+             c.w > 3 && c.h > 3;
     });
     if (swatches.length < 2) return out;
-    var xs = swatches.map(function (c) { return c.cx; }), ys = swatches.map(function (c) { return c.cy; });
+    // 取最接近某个系列色的色块
+    var seriesLab = roles.series.map(function (h) { var rgb = hexToRgb(h); return rgb2lab(rgb.r, rgb.g, rgb.b); });
+    var colored = swatches.filter(function (c) {
+      var idx = (Math.round(c.cy) * W + Math.round(c.cx)) * 4;
+      var cl = rgb2lab(px[idx], px[idx + 1], px[idx + 2]);
+      return seriesLab.some(function (sl) { return dE76(cl, sl) < 25; });
+    });
+    if (colored.length < 2) return out;
+    var xs = colored.map(function (c) { return c.cx; }), ys = colored.map(function (c) { return c.cy; });
     var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
     var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
-    if (maxX - minX > rect.w * 0.6 || maxY - minY > rect.h * 0.8) return out;
+    if (maxX - minX > rect.w * 0.8 || maxY - minY > rect.h * 0.5) return out;
     var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
     var right = cx > rect.x + rect.w / 2, bottom = cy > rect.y + rect.h / 2;
     out.visible = true;
     out.detected = true;
     out.position = (bottom ? 'bottom' : 'top') + '-' + (right ? 'right' : 'left');
-    out.columns = Math.max(1, Math.min(4, Math.round((maxX - minX) / Math.max(8, (maxY - minY) / Math.max(1, swatches.length / 2)))));
+    out.columns = Math.max(1, Math.min(4, Math.round((maxX - minX) / Math.max(8, (maxY - minY) / Math.max(1, colored.length / 2)))));
     return out;
   }
 

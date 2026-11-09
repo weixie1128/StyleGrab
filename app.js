@@ -20,6 +20,7 @@
     inset: { left: 0, top: 0, right: 0, bottom: 0 },
     view: 'ref',
     blend: 0.5,
+    pickMode: null,
     previewCanvas: null,
     score: null
   };
@@ -395,9 +396,13 @@
 
     var seriesWrap = el('div', 'series-block');
     seriesWrap.appendChild(el('span', 'pfield-label', '系列色（按面积排序）'));
+    var pickTip = el('div', 'pick-hint', '点击「取色」后在左侧参考图上点一下即可吸取该位置颜色');
+    if (state.pickMode !== null) pickTip.classList.add('active');
+    seriesWrap.appendChild(pickTip);
     var list = el('div', 'series-list');
     state.spec.colors.series.forEach(function (hex, i) {
       var item = el('div', 'series-item');
+      if (state.pickMode === i) item.classList.add('picking');
       var inp = document.createElement('input');
       inp.type = 'color';
       inp.value = hex;
@@ -408,12 +413,24 @@
       item.appendChild(inp);
       var idx = el('code', null, String(i + 1));
       item.appendChild(idx);
+      var pick = el('button', 'mini pick' + (state.pickMode === i ? ' on' : ''), '取色');
+      pick.type = 'button';
+      pick.title = '从参考图吸取颜色';
+      pick.addEventListener('click', function () {
+        state.pickMode = (state.pickMode === i) ? null : i;
+        buildPanel();
+        var canvas = $('#stageCanvas');
+        if (canvas) canvas.style.cursor = state.pickMode !== null ? 'crosshair' : '';
+        status(state.pickMode !== null ? '取色模式：在参考图上点击吸取第 ' + (i + 1) + ' 个系列色' : '');
+      });
+      item.appendChild(pick);
       if (state.spec.colors.series.length > 1) {
         var del = el('button', 'mini', '×');
         del.type = 'button';
         del.title = '移除这个系列色';
         del.addEventListener('click', function () {
           state.spec.colors.series.splice(i, 1);
+          state.pickMode = null;
           buildPanel(); onFieldChange('colors.series');
         });
         item.appendChild(del);
@@ -572,6 +589,31 @@
       $('#blendValue').textContent = Math.round(state.blend * 100) + '%';
       drawView();
     });
+
+    // 从参考图取色
+    var stageCanvas = $('#stageCanvas');
+    if (stageCanvas) {
+      stageCanvas.addEventListener('click', function (e) {
+        if (state.pickMode === null || !state.refSized) return;
+        var rect = stageCanvas.getBoundingClientRect();
+        var scaleX = stageCanvas.width / rect.width;
+        var scaleY = stageCanvas.height / rect.height;
+        var x = Math.round((e.clientX - rect.left) * scaleX);
+        var y = Math.round((e.clientY - rect.top) * scaleY);
+        var ctx = stageCanvas.getContext('2d');
+        var pixel = ctx.getImageData(x, y, 1, 1).data;
+        var hex = '#' + [pixel[0], pixel[1], pixel[2]].map(function (v) {
+          return v.toString(16).padStart(2, '0');
+        }).join('');
+        state.spec.colors.series[state.pickMode] = hex;
+        var idx = state.pickMode;
+        state.pickMode = null;
+        stageCanvas.style.cursor = '';
+        buildPanel();
+        onFieldChange('colors.series');
+        status('已吸取第 ' + (idx + 1) + ' 个系列色：' + hex.toUpperCase());
+      });
+    }
 
     $('#applyCrop').addEventListener('click', function () {
       state.inset = {
