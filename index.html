@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StyleGrab · 把论文图拆成可复用的样式参数</title>
+<meta name="description" content="上传一张好看的论文图，StyleGrab 把它量化成 sp1 样式参数（配色、线宽、字号、版式），导出 JSON 供绘图工具直接套用。">
+<meta name="theme-color" content="#f6f5f1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316211e'/%3E%3Crect x='7' y='18' width='4' height='7' fill='%234c7f6b'/%3E%3Crect x='14' y='13' width='4' height='12' fill='%239ec3ae'/%3E%3Crect x='21' y='8' width='4' height='17' fill='%23d8a25e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css?v=0.1.0">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="26" height="26"><rect width="24" height="24" rx="5" fill="currentColor" opacity=".12"/><rect x="5" y="13" width="3" height="6" fill="currentColor"/><rect x="10.5" y="9" width="3" height="10" fill="currentColor" opacity=".62"/><rect x="16" y="5" width="3" height="14" fill="currentColor" opacity=".34"/></svg>
+    </span>
+    <div class="brand-text">
+      <b>StyleGrab</b>
+      <small>把论文图拆成可复用的样式参数</small>
+    </div>
+  </div>
+  <div class="topmeta">
+    <span class="badge" title="参数协议版本">sp1</span>
+    <span class="ver">v0.1.0</span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <aside class="rail">
+    <div class="rail-card">
+      <h2>怎么用</h2>
+      <ol class="steps">
+        <li><b>取图</b><span>拖入一张论文图截图，或粘贴剪贴板里的图</span></li>
+        <li><b>归一化</b><span>自动裁掉白边，缩到统一尺度；裁错了可手动内缩</span></li>
+        <li><b>测量</b><span>配色、线宽、字号、版式、刻度全部换成「占画布宽的比例」</span></li>
+        <li><b>校验</b><span>按参数重画一张，叠加看差异，自动微调后再导出</span></li>
+      </ol>
+    </div>
+
+    <div class="rail-card quiet">
+      <h2>单位说明</h2>
+      <p>所有长度都是<b>画布宽度的百分比</b>，所以同一份参数套到 85mm 单栏和 170mm 双栏都不会走形。面板里的 pt 值按 85mm 单栏换算。</p>
+    </div>
+
+    <div class="rail-card quiet">
+      <h2>准确度提示</h2>
+      <p>图片内容宽度 <b>≥ 900px</b> 才测量线宽与字号；600–900px 只保证配色与版式；更小的图只给配色参考。测不准的项会在面板上标灰。</p>
+    </div>
+  </aside>
+
+  <section class="stage">
+
+    <div id="dropzone" class="dropzone">
+      <div class="dz-inner">
+        <div class="dz-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="56" height="56">
+            <rect x="6" y="10" width="52" height="44" rx="6" fill="none" stroke="currentColor" stroke-width="2" opacity=".35"/>
+            <path d="M14 46 L26 32 L34 40 L44 26 L50 34" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="20" cy="22" r="3" fill="currentColor" opacity=".55"/>
+          </svg>
+        </div>
+        <h1>丢一张好看的论文图进来</h1>
+        <p>StyleGrab 会把它拆成配色、线宽、字号、版式参数，导出 <code>.spec.json</code> 给绘图工具直接套用。</p>
+        <div class="dz-actions">
+          <button id="pickFile" class="btn primary" type="button">选择图片</button>
+          <span class="dz-or">或</span>
+          <div class="url-row">
+            <input id="urlInput" type="url" placeholder="粘贴图片链接" spellcheck="false">
+            <button id="urlGo" class="btn" type="button">读取</button>
+          </div>
+        </div>
+        <p class="dz-hint">也可以直接 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴截图。外链图片若对方不允许跨域，请先下载再拖进来。</p>
+      </div>
+    </div>
+
+    <div id="workspace" class="workspace" hidden>
+      <div class="stage-toolbar">
+        <div class="tabs" role="tablist">
+          <button type="button" data-view="ref" class="active">参考图</button>
+          <button type="button" data-view="preview">按参数重画</button>
+          <button type="button" data-view="overlay">叠加</button>
+          <button type="button" data-view="diff">差异热图</button>
+        </div>
+        <div class="blend" id="blendWrap" hidden>
+          <span>参考</span>
+          <input id="blend" type="range" min="0" max="100" value="50">
+          <span>重画</span>
+          <b id="blendValue">50%</b>
+        </div>
+        <button id="changeImage" class="btn ghost" type="button">换一张</button>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="stageCanvas" width="1000" height="640"></canvas>
+      </div>
+
+      <div class="stage-foot">
+        <div class="score">
+          <div class="ring" id="scoreRing" style="--p:.8">
+            <span id="scoreValue">—</span>
+          </div>
+          <div class="score-text">
+            <b>结构相似度</b>
+            <small id="metricDetail">等待分析</small>
+          </div>
+        </div>
+        <p class="spec-hint" id="specHint"></p>
+        <div class="crop">
+          <span class="crop-title">裁剪修正（%）</span>
+          <label>左<input id="cropLeft" type="number" min="0" max="40" step="0.5" value="0"></label>
+          <label>上<input id="cropTop" type="number" min="0" max="40" step="0.5" value="0"></label>
+          <label>右<input id="cropRight" type="number" min="0" max="40" step="0.5" value="0"></label>
+          <label>下<input id="cropBottom" type="number" min="0" max="40" step="0.5" value="0"></label>
+          <button id="applyCrop" class="btn tiny" type="button">应用</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <h2>样式参数</h2>
+      <span class="panel-sub">可逐项手改，改完立即重画</span>
+    </div>
+    <div id="specPanel" class="panel-body">
+      <p class="panel-empty">还没有数据。先在左侧拖入一张参考图。</p>
+    </div>
+    <div class="panel-actions">
+      <button id="reanalyze" class="btn" type="button">重新测量</button>
+      <button id="autoTune" class="btn" type="button">自动校正</button>
+      <button id="resetSpec" class="btn ghost" type="button">还原测量值</button>
+      <button id="exportSpec" class="btn primary block" type="button">导出 .spec.json</button>
+      <button id="copySummary" class="btn ghost block" type="button">复制参数摘要（pt / mm）</button>
+    </div>
+  </aside>
+
+</main>
+
+<footer class="statusbar">
+  <span class="dot" aria-hidden="true"></span>
+  <span id="statusText">等待图片</span>
+  <span class="status-right">纯静态 · 图片不上传服务器 · 协议 sp1</span>
+</footer>
+
+<input id="fileInput" type="file" accept="image/*" hidden>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="spec-schema.js?v=0.1.0"></script>
+<script src="image-analysis.js?v=0.1.0"></script>
+<script src="preview-renderer.js?v=0.1.0"></script>
+<script src="app.js?v=0.1.0"></script>
+</body>
+</html>
