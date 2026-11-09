@@ -681,8 +681,63 @@
       spec.specific.heatmap.gradient = buildGradient(px, W, H, rect);
     }
 
-    // ---- 置信度 ----
+    // 分辨率因子（高分辨率图可信度更高）
     var resFactor = clamp(W / 1200, 0.4, 1);
+
+    // ---- 显著性字母大小 ----（绘图区内上部、高度接近刻度字号的小连通域）
+    var letterH = 0;
+    if (tickH > 0) {
+      var letterComps = allComps.filter(function (c) {
+        return c.cy > rect.y && c.cy < rect.y + rect.h * 0.7 &&
+               c.h >= tickH * 0.5 && c.h <= tickH * 1.6 &&
+               c.w >= tickH * 0.3 && c.w <= tickH * 2.2 &&
+               c.area < W * H * 0.0015;
+      });
+      if (letterComps.length >= 2) {
+        letterH = median(letterComps.map(function (c) { return c.h; }));
+      }
+    }
+    if (letterH > 0) {
+      spec.letters.size = clamp(letterH / 0.72 / W, 0.006, 0.05);
+      spec.letters.weight = 'bold';
+      mark('letters', 0.6 * resFactor);
+    }
+
+    // ---- 误差棒帽宽 ----（轴线色掩膜里的短水平线段）
+    var capW = 0;
+    var axisM = colorMask(px, W, H, roles.axis, 14);
+    var minRun = Math.max(2, Math.round(lineWidthPx * 1.5));
+    var maxRun = Math.round(W * 0.04);
+    var capRuns = [];
+    for (var cy = Math.round(rect.y) + 1; cy < rect.y + rect.h - 1; cy++) {
+      var run = 0;
+      for (var cx = Math.round(rect.x) + 1; cx < rect.x + rect.w - 1; cx++) {
+        if (axisM[cy * W + cx]) { run++; }
+        else {
+          if (run >= minRun && run <= maxRun) capRuns.push(run);
+          run = 0;
+        }
+      }
+      if (run >= minRun && run <= maxRun) capRuns.push(run);
+    }
+    if (capRuns.length >= 4) capW = median(capRuns);
+    if (capW > 0) spec.specific.errorbar.capWidth = clamp(capW / W, 0.002, 0.04);
+
+    // ---- 折线标记填充（空心/实心）----
+    if (markerComps.length >= 3) {
+      var hollow = 0, solid = 0;
+      markerComps.forEach(function (c) {
+        var mcx = Math.round(c.cx), mcy = Math.round(c.cy);
+        if (mcx > 0 && mcx < W - 1 && mcy > 0 && mcy < H - 1) {
+          var idx = (mcy * W + mcx) * 4;
+          var dr = px[idx] - bg.r, dg = px[idx + 1] - bg.g, db = px[idx + 2] - bg.b;
+          if (dr * dr + dg * dg + db * db < 600) hollow++; else solid++;
+        }
+      });
+      spec.specific.line.markerFill = hollow >= solid ? 'white' : 'series';
+    }
+
+    // ---- 置信度 ----
     var conf = {};
     var low = [];
     function mark(key, v) {

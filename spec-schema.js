@@ -1,4 +1,4 @@
-/*
+﻿/*
  * StyleGrab · spec-schema.js
  * sp1 协议定义：默认值、归一化、校验、序列化、单位换算、人读摘要
  *
@@ -11,7 +11,7 @@
   'use strict';
 
   var PROTOCOL = 'sp1';
-  var BUILDER = { name: 'StyleGrab', version: '0.1.0' };
+  var BUILDER = { name: 'StyleGrab', version: '0.1.1' };
 
   // 六类单 panel 图型
   var CHART_TYPES = ['bar', 'line', 'scatter', 'box', 'heatmap', 'errorbar'];
@@ -72,9 +72,12 @@
 
     markers: { shape: 'circle', radius: 0.006, fillAlpha: 1 },
 
+    // 显著性字母（柱/箱线图上方的 a/b/c 或 A/B/C）
+    letters: { visible: true, size: 0.014, weight: 'bold' },
+
     specific: {
-      bar: { widthRatio: 0.62, edgeWidth: 0.001, gap: 0.12 },
-      line: { smooth: false },
+      bar: { widthRatio: 0.62, edgeWidth: 0.001, gap: 0.003 },
+      line: { smooth: false, markerFill: 'white', lineMode: 'straight', lineOffset: 0 },
       scatter: { radius: 0.005, fillAlpha: 0.9 },
       box: { whisker: 1.5, capWidth: 0.022 },
       heatmap: { gradient: ['#f4f9f7', '#2c6b5d'], cellGap: 0.008 },
@@ -167,6 +170,11 @@
     s.grid.alpha = clampNum(s.grid.alpha, 0, 1, 0.6);
     s.markers.radius = clampNum(s.markers.radius, 0, 0.04, 0.006);
     s.markers.fillAlpha = clampNum(s.markers.fillAlpha, 0.05, 1, 1);
+    s.letters.visible = s.letters.visible !== false;
+    s.letters.size = clampNum(s.letters.size, 0.006, 0.05, 0.014);
+    if (['normal', 'medium', 'bold'].indexOf(s.letters.weight) < 0) s.letters.weight = 'bold';
+    if (['white', 'series'].indexOf(s.specific.line.markerFill) < 0) s.specific.line.markerFill = 'white';
+    if (['straight', 'smooth'].indexOf(s.specific.line.lineMode) < 0) s.specific.line.lineMode = 'straight';
     Object.keys(s.specific).forEach(function (g) {
       if (!isObj(s.specific[g])) return;
       Object.keys(s.specific[g]).forEach(function (k) {
