@@ -11,7 +11,7 @@
   'use strict';
 
   var PROTOCOL = 'sp1';
-  var BUILDER = { name: 'StyleGrab', version: '0.1.6' };
+  var BUILDER = { name: 'StyleGrab', version: '0.1.7' };
 
   // 六类单 panel 图型
   var CHART_TYPES = ['bar', 'line', 'scatter', 'box', 'heatmap', 'errorbar'];

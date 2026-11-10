@@ -20,7 +20,7 @@
     inset: { left: 0, top: 0, right: 0, bottom: 0 },
     view: 'ref',
     blend: 0.5,
-    forcedType: 'bar',    // 用户在上传前指定的图型，分析时强制使用
+    forcedType: null,    // null = 自动识别；用户在面板改图型后固定为该值
     pickMode: null,
     previewCanvas: null,
     score: null
@@ -183,6 +183,7 @@
       conf: 'layout', title: '画布与版式',
       items: [
         { path: 'meta.canvasAspect', label: '宽高比', type: 'num', step: 0.01, min: 0.4, max: 4, suffix: ': 1' },
+        { path: 'meta.chartType', label: '图型', type: 'select', options: [['bar', '柱状'], ['line', '折线'], ['scatter', '散点'], ['box', '箱线'], ['heatmap', '热图']] },
         { path: 'layout.plotLeft', label: '左留白', type: 'pct' },
         { path: 'layout.plotRight', label: '右留白', type: 'pct' },
         { path: 'layout.plotTop', label: '上留白', type: 'pct' },
@@ -237,12 +238,32 @@
   ];
 
   var TYPE_FIELDS = {
-    bar: [{ path: 'specific.bar.widthRatio', label: '柱宽占比', type: 'num', step: 0.02, min: 0.1, max: 1 }, { path: 'specific.bar.edgeWidth', label: '柱边框', type: 'pt' }],
-    line: [{ path: 'specific.line.smooth', label: '曲线平滑', type: 'check' }],
-    scatter: [{ path: 'specific.scatter.radius', label: '点半径', type: 'pt2' }, { path: 'specific.scatter.fillAlpha', label: '点不透明度', type: 'num', step: 0.05, min: 0, max: 1 }],
-    box: [{ path: 'specific.box.capWidth', label: '须帽宽度', type: 'pt2' }],
-    heatmap: [{ path: 'specific.heatmap.cellGap', label: '单元格间隙', type: 'pt2' }],
-    errorbar: [{ path: 'specific.errorbar.capWidth', label: '误差棒帽宽', type: 'pt2' }]
+    bar: [
+      { path: 'specific.bar.widthRatio', label: '整组宽占比', type: 'num', step: 0.02, min: 0.1, max: 1 },
+      { path: 'specific.bar.gap', label: '组内柱间距', type: 'num', step: 0.001, min: 0, max: 0.05 },
+      { path: 'specific.bar.edgeWidth', label: '柱边框', type: 'pt' },
+      { path: 'specific.errorbar.capWidth', label: '误差棒帽宽', type: 'pt2' }
+    ],
+    line: [
+      { path: 'specific.line.lineMode', label: '连线方式', type: 'select', options: [['straight', '折线'], ['smooth', '平滑曲线']] },
+      { path: 'specific.line.lineOffset', label: '线宽偏移', type: 'num', step: 0.1, min: -2, max: 2 },
+      { path: 'markers.shape', label: '标记形状', type: 'select', options: [['circle', '圆'], ['square', '方'], ['triangle', '三角'], ['diamond', '菱形']] }
+    ],
+    scatter: [
+      { path: 'specific.scatter.radius', label: '点半径', type: 'pt2' },
+      { path: 'specific.scatter.fillAlpha', label: '点不透明度', type: 'num', step: 0.05, min: 0, max: 1 },
+      { path: 'markers.shape', label: '点形状', type: 'select', options: [['circle', '圆'], ['square', '方'], ['triangle', '三角'], ['diamond', '菱形']] }
+    ],
+    box: [
+      { path: 'specific.box.capWidth', label: '须帽宽度', type: 'pt2' },
+      { path: 'specific.box.whisker', label: '须长度系数', type: 'num', step: 0.1, min: 0.5, max: 3 }
+    ],
+    heatmap: [
+      { path: 'specific.heatmap.cellGap', label: '单元格间隙', type: 'pt2' }
+    ],
+    errorbar: [
+      { path: 'specific.errorbar.capWidth', label: '误差棒帽宽', type: 'pt2' }
+    ]
   };
 
   function confOf(groupKey) {
@@ -359,7 +380,7 @@
       });
       sel.addEventListener('change', function () {
         setPath(state.spec, it.path, sel.value);
-        if (it.path === 'meta.chartType') { buildPanel(); }
+        if (it.path === 'meta.chartType') { state.forcedType = sel.value; reanalyze(true); return; }
         onFieldChange(it.path);
       });
       row.appendChild(sel);
@@ -601,16 +622,7 @@
       }
     });
 
-    // 图型选择：上传前指定，分析时强制按该图型抓取
-    Array.prototype.forEach.call(document.querySelectorAll('.type-chip'), function (btn) {
-      btn.addEventListener('click', function () {
-        state.forcedType = btn.dataset.type;
-        Array.prototype.forEach.call(document.querySelectorAll('.type-chip'), function (b) {
-          b.classList.toggle('active', b === btn);
-        });
-        if (state.refCanvas) reanalyze(true);
-      });
-    });
+    // 图型由参数面板的下拉决定；改动后按新图型重新抓取
 
     // 从参考图取色
     var stageCanvas = $('#stageCanvas');
