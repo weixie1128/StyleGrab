@@ -674,11 +674,14 @@
 
     // 图型专属参数
     if (typeInfo.type === 'bar') {
-      var barInfo = estimateBarWidth(mask, W, H, rect);
+      var barInfo = estimateBarWidth(mask, W, H, rect, px, bg);
       if (barInfo.width > 0) {
-        spec.specific.bar.widthRatio = clamp(barInfo.width / W * 3.2, 0.15, 0.95);
-        // 柱子间距：<=1px 视为无间距
-        spec.specific.bar.gap = barInfo.gap <= 1 ? 0 : clamp(barInfo.gap / W, 0, 0.02);
+        // widthRatio 语义：整组宽 / 类间距，与主站 categoryWidth 一致
+        spec.specific.bar.widthRatio = barInfo.groupWidthRatio != null
+          ? barInfo.groupWidthRatio
+          : clamp(barInfo.width / W * 3.2, 0.15, 0.95);
+        // 柱子间距：<=2px 视为无间距（抗锯齿边缘不算间隙）
+        spec.specific.bar.gap = barInfo.gap <= 2 ? 0 : clamp(barInfo.gap / W, 0, 0.02);
       }
       // 柱子描边：无边框则 stroke.markerEdge = 0
       if (!hasBarBorder(px, W, H, rect, mask)) {
@@ -827,31 +830,70 @@
     return Math.min(mv, mh) || mv || mh;
   }
 
-  function estimateBarWidth(mask, W, H, rect) {
-    var widths = [];
+  function estimateBarWidth(mask, W, H, rect, px, bg) {
+    var cols = [];
     for (var x = Math.round(rect.x) + 1; x < rect.x + rect.w - 1; x++) {
       var run = 0, best = 0;
       for (var y = Math.round(rect.y + rect.h) - 2; y > rect.y; y--) {
         if (mask[y * W + x]) { run++; if (run > best) best = run; } else run = 0;
       }
-      if (best > rect.h * 0.3) widths.push(x);
+      if (best > rect.h * 0.3) cols.push(x);
     }
-    if (widths.length < 3) return { width: 0, gap: 0 };
-    // 连续列分成若干段
-    var segs = [], gaps = [], start = widths[0], prev = widths[0];
-    for (var i = 1; i < widths.length; i++) {
-      if (widths[i] - prev > 2) {
-        segs.push(prev - start + 1);
-        gaps.push(widths[i] - prev - 1);
-        start = widths[i];
+    if (cols.length < 3) return { width: 0, gap: 0, groupWidthRatio: null };
+
+    // 1) 连续列 -> 柱体候选段
+    var runs = [], startCol = cols[0], prev = cols[0];
+    for (var i = 1; i < cols.length; i++) {
+      if (cols[i] - prev > 1) {
+        runs.push({ x0: startCol, x1: prev, w: prev - startCol + 1 });
+        startCol = cols[i];
       }
-      prev = widths[i];
+      prev = cols[i];
     }
-    segs.push(prev - start + 1);
-    var validSegs = segs.filter(function (s) { return s > 3; });
-    var w = validSegs.length ? median(validSegs) : 0;
-    var g = gaps.length ? median(gaps) : 0;
-    return { width: w, gap: g };
+    runs.push({ x0: startCol, x1: prev, w: prev - startCol + 1 });
+
+    // 2) 间隙判据：该列整段是否为背景色。同组不同色柱之间的抗锯齿过渡不是背景，属假间隙
+    function bgish(x) {
+      var y0 = Math.round(rect.y + rect.h * 0.15), y1 = Math.round(rect.y + rect.h * 0.92);
+      var step = Math.max(1, Math.round((y1 - y0) / 14)), near = 0, tot = 0;
+      for (var y = y0; y < y1; y += step) {
+        var j = (y * W + x) * 4;
+        var d = Math.abs(px[j] - bg.r) + Math.abs(px[j + 1] - bg.g) + Math.abs(px[j + 2] - bg.b);
+        tot++; if (d < 45) near++;
+      }
+      return tot > 0 && near / tot >= 0.8;
+    }
+
+    // 3) 先由柱体段估出单柱宽，用于区分组内间隔与组间间隔
+    var widths = runs.map(function (v) { return v.w; }).filter(function (v) { return v > 3; });
+    var barW = widths.length ? median(widths) : 0;
+    if (!barW) return { width: 0, gap: 0, groupWidthRatio: null };
+
+    // 4) 真实背景间隙中：窄的是组内柱间距，宽的是组间类间距（用于分组）
+    var clusters = [[runs[0]]], innerGaps = [];
+    for (var r = 1; r < runs.length; r++) {
+      var gapW = runs[r].x0 - runs[r - 1].x1 - 1;
+      var midX = Math.round((runs[r - 1].x1 + runs[r].x0) / 2);
+      var isBg = gapW >= 2 && bgish(midX);
+      if (isBg && gapW >= barW * 0.5) {
+        clusters.push([runs[r]]);          // 组间间隔
+      } else {
+        clusters[clusters.length - 1].push(runs[r]);
+        if (isBg) innerGaps.push(gapW);    // 组内真实柱间距
+      }
+    }
+
+    // 5) 组宽 = 组首列到组末列；类间距 = 相邻组首列差
+    var groupWidthRatio = null;
+    if (clusters.length > 1) {
+      var clusterW = clusters.map(function (c) { return c[c.length - 1].x1 - c[0].x0 + 1; });
+      var steps = [];
+      for (var q = 1; q < clusters.length; q++) steps.push(clusters[q][0].x0 - clusters[q - 1][0].x0);
+      var xStep = median(steps), gw = median(clusterW);
+      if (xStep > 0 && gw > 0) groupWidthRatio = clamp(gw / xStep, 0.1, 0.95);
+    }
+
+    return { width: barW, gap: innerGaps.length ? median(innerGaps) : 0, groupWidthRatio: groupWidthRatio };
   }
 
   // 检测柱子是否有描边：比较柱体边缘与内部的亮度差
@@ -870,7 +912,8 @@
     }
     if (edges.length < 5 || interiors.length < 10) return false;
     var edgeLum = median(edges), intLum = median(interiors);
-    return Math.abs(edgeLum - intLum) > 18;
+    // 只有「边缘明显比填充更暗」才是描边；边缘更亮属于抗锯齿与背景混色，不算边框
+    return edgeLum < intLum - 15;
   }
 
   function buildGradient(px, W, H, rect) {
