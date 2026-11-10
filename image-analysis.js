@@ -462,7 +462,7 @@
   }
 
   // ---------------- 主分析 ----------------
-  function analyzeCanvas(canvas) {
+  function analyzeCanvas(canvas, opts) {
     var data = readData(canvas);
     var px = data.data, W = canvas.width, H = canvas.height;
     var bg = estimateBackground(px, W, H);
@@ -548,7 +548,9 @@
       px: px, W: W, H: H, mask: mask, rect: rect, clusters: clusters,
       componentsAll: allComps, markerComps: markerComps, lineWidthPx: lineWidthPx
     };
-    var typeInfo = inferType(ctx);
+    var typeInfo = (opts && opts.forcedType)
+      ? { type: opts.forcedType, conf: 1, hint: '用户指定' }
+      : inferType(ctx);
 
     // ---- 文字尺寸 ----
     var textComps = allComps.filter(function (c) { return c.h >= 4 && c.h <= H * 0.12 && c.w <= W * 0.35; });

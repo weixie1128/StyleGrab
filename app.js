@@ -20,6 +20,7 @@
     inset: { left: 0, top: 0, right: 0, bottom: 0 },
     view: 'ref',
     blend: 0.5,
+    forcedType: 'bar',    // 用户在上传前指定的图型，分析时强制使用
     pickMode: null,
     previewCanvas: null,
     score: null
@@ -102,7 +103,7 @@
     try {
       var canvas = A.cropByInset(state.refCanvas, state.inset);
       state.analysisCanvas = canvas;
-      var res = A.analyzeCanvas(canvas);
+      var res = A.analyzeCanvas(canvas, { forcedType: state.forcedType });
       state.spec = S.normalizeSpec(res.spec);
       state.stats = res.stats;
       state.spec.thumbnail = A.thumbnail(canvas, 480, 0.72);
@@ -150,8 +151,7 @@
     state.score = R.compare(ref, pv);
     updateMetrics();
     drawView();
-    if (resetBlend) { state.blend = 0.5; var sl = $('#blend'); if (sl) sl.value = 50; }
-    $('#blendValue') && ($('#blendValue').textContent = Math.round(state.blend * 100) + '%');
+    if (resetBlend) state.blend = 0.5;
   }
 
   function updateMetrics() {
@@ -169,24 +169,12 @@
   function drawView() {
     var canvas = $('#stageCanvas');
     if (!canvas || !state.spec) return;
-    var pv = state.previewCanvas, ref = state.refSized;
-    canvas.width = pv.width;
-    canvas.height = pv.height;
+    var ref = state.refSized;
+    canvas.width = ref.width;
+    canvas.height = ref.height;
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (state.view === 'ref') {
-      ctx.drawImage(ref, 0, 0);
-    } else if (state.view === 'preview') {
-      ctx.drawImage(pv, 0, 0);
-    } else if (state.view === 'overlay') {
-      ctx.drawImage(ref, 0, 0);
-      ctx.globalAlpha = state.blend;
-      ctx.drawImage(pv, 0, 0);
-      ctx.globalAlpha = 1;
-    } else if (state.view === 'diff') {
-      R.diffHeatmap(ref, pv, canvas);
-    }
+    ctx.drawImage(ref, 0, 0);
   }
 
   // ---------------- 参数面板 ----------------
@@ -195,7 +183,6 @@
       conf: 'layout', title: '画布与版式',
       items: [
         { path: 'meta.canvasAspect', label: '宽高比', type: 'num', step: 0.01, min: 0.4, max: 4, suffix: ': 1' },
-        { path: 'meta.chartType', label: '图型', type: 'select', options: [['bar', '柱状'], ['line', '折线'], ['scatter', '散点'], ['box', '箱线'], ['heatmap', '热图'], ['errorbar', '误差棒']] },
         { path: 'layout.plotLeft', label: '左留白', type: 'pct' },
         { path: 'layout.plotRight', label: '右留白', type: 'pct' },
         { path: 'layout.plotTop', label: '上留白', type: 'pct' },
@@ -264,6 +251,40 @@
     return typeof c === 'number' ? c : null;
   }
 
+  // 每项参数的测量依据（按路径匹配，越具体的规则放前面）
+  var EV_RULES = [
+    [/^meta\.chartType/, '用户在上传前指定的图型，分析全程按它执行'],
+    [/^meta\.canvasAspect/, '输入画布的宽高比'],
+    [/^layout\./, '墨迹外接框相对画布边界的留白比例'],
+    [/^colors\.axis/, '轴线区域出现最多的深色'],
+    [/^colors\.text/, '文字连通域的主色'],
+    [/^colors\.grid/, '绘图区内低对比度等距线条的颜色'],
+    [/^colors\.background/, '画布中出现次数最多的颜色'],
+    [/^colors\./, '绘图区颜色聚类，取面积占比最高的主色'],
+    [/^strokes\.axis/, '沿轴线位置逐列扫描，取连续同色段的最小宽度（抗锯齿只会变宽，最小值最准）'],
+    [/^strokes\.errorbar/, '误差棒竖直段的宽度'],
+    [/^strokes\.markerEdge/, '柱/标记边缘是否比填充明显更暗；没有深色描边则记 0'],
+    [/^strokes\./, '沿线位置扫描，取连续同色段的最小宽度'],
+    [/^text\.title/, '标题文字连通域高度 ÷ 0.72 换算字号'],
+    [/^text\./, '该类文字连通域高度 ÷ 0.72 换算字号'],
+    [/^ticks\./, '刻度线的可见长度'],
+    [/^grid\./, '绘图区内等距低对比线条的分布'],
+    [/^legend\./, '搜索绘图区上方区域的方形色块，按系列色匹配'],
+    [/^frame\./, '判断四条边灰线是否闭合'],
+    [/^markers\./, '小连通域的尺寸与长宽比'],
+    [/^letters\./, '柱体上方字母连通域的高度与笔画粗细'],
+    [/^specific\.bar\.gap/, '逐个间隙采样：整列为背景色才算真间隙，柱色过渡视为紧贴'],
+    [/^specific\.bar\.widthRatio/, '组首列到组末列宽度 ÷ 相邻组首列间距（整组宽 / 类间距）'],
+    [/^specific\.bar\.edgeWidth/, '柱边缘是否比填充明显更暗；是则记为描边，否则无边框'],
+    [/^specific\.errorbar/, '误差棒端帽的水平宽度'],
+    [/^specific\.line/, '折线拐点、平滑度与标记填充'],
+    [/^specific\./, '该图型对应的专属测量']
+  ];
+  function evidenceFor(path) {
+    for (var i = 0; i < EV_RULES.length; i++) if (EV_RULES[i][0].test(path)) return EV_RULES[i][1];
+    return '';
+  }
+
   function buildPanel() {
     var host = $('#specPanel');
     host.innerHTML = '';
@@ -299,6 +320,14 @@
     var grid = el('div', 'pgroup-body');
     g.items.forEach(function (it) { grid.appendChild(buildField(it)); });
     box.appendChild(grid);
+    // 测量依据：逐项说明这个值是怎么量出来的
+    var det = el('details', 'pgroup-ev');
+    det.appendChild(el('summary', null, '测量依据'));
+    g.items.forEach(function (it) {
+      var e = evidenceFor(it.path);
+      if (e) det.appendChild(el('p', 'ev', it.label + '：' + e));
+    });
+    box.appendChild(det);
     return box;
   }
 
@@ -572,22 +601,15 @@
       }
     });
 
-    Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function (btn) {
+    // 图型选择：上传前指定，分析时强制按该图型抓取
+    Array.prototype.forEach.call(document.querySelectorAll('.type-chip'), function (btn) {
       btn.addEventListener('click', function () {
-        state.view = btn.dataset.view;
-        Array.prototype.forEach.call(document.querySelectorAll('[data-view]'), function (b) {
+        state.forcedType = btn.dataset.type;
+        Array.prototype.forEach.call(document.querySelectorAll('.type-chip'), function (b) {
           b.classList.toggle('active', b === btn);
         });
-        var sliderWrap = $('#blendWrap');
-        if (sliderWrap) sliderWrap.hidden = state.view !== 'overlay';
-        drawView();
+        if (state.refCanvas) reanalyze(true);
       });
-    });
-
-    $('#blend').addEventListener('input', function () {
-      state.blend = Number(this.value) / 100;
-      $('#blendValue').textContent = Math.round(state.blend * 100) + '%';
-      drawView();
     });
 
     // 从参考图取色

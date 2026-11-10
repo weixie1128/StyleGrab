@@ -36,7 +36,7 @@
         <li><b>取图</b><span>拖入一张论文图截图，或粘贴剪贴板里的图</span></li>
         <li><b>归一化</b><span>自动裁掉白边，缩到统一尺度；裁错了可手动内缩</span></li>
         <li><b>测量</b><span>配色、线宽、字号、版式、刻度全部换成「占画布宽的比例」</span></li>
-        <li><b>校验</b><span>按参数重画一张，叠加看差异，自动微调后再导出</span></li>
+        <li><b>导出</b><span>每项参数附带测量依据，导出 <code>.spec.json</code> 直接套用</span></li>
       </ol>
     </div>
 
@@ -64,6 +64,15 @@
         </div>
         <h1>丢一张好看的论文图进来</h1>
         <p>StyleGrab 会把它拆成配色、线宽、字号、版式参数，导出 <code>.spec.json</code> 给绘图工具直接套用。</p>
+        <div class="type-row" role="group" aria-label="先选图型">
+          <span class="type-label">先选图型</span>
+          <button type="button" class="type-chip active" data-type="bar">柱状</button>
+          <button type="button" class="type-chip" data-type="line">折线</button>
+          <button type="button" class="type-chip" data-type="scatter">散点</button>
+          <button type="button" class="type-chip" data-type="box">箱线</button>
+          <button type="button" class="type-chip" data-type="heatmap">热图</button>
+          <button type="button" class="type-chip" data-type="errorbar">误差棒</button>
+        </div>
         <div class="dz-actions">
           <button id="pickFile" class="btn primary" type="button">选择图片</button>
           <span class="dz-or">或</span>
@@ -78,18 +87,7 @@
 
     <div id="workspace" class="workspace" hidden>
       <div class="stage-toolbar">
-        <div class="tabs" role="tablist">
-          <button type="button" data-view="ref" class="active">参考图</button>
-          <button type="button" data-view="preview">按参数重画</button>
-          <button type="button" data-view="overlay">叠加</button>
-          <button type="button" data-view="diff">差异热图</button>
-        </div>
-        <div class="blend" id="blendWrap" hidden>
-          <span>参考</span>
-          <input id="blend" type="range" min="0" max="100" value="50">
-          <span>重画</span>
-          <b id="blendValue">50%</b>
-        </div>
+        <div class="stage-label">参考图</div>
         <button id="changeImage" class="btn ghost" type="button">换一张</button>
       </div>
 
